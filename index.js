@@ -7,7 +7,7 @@ var os = require('os');
 var fs = require('fs');
 var async = require('async');
 var assign = require('object-assign');
-
+var crypto = require('crypto');
 // A typical sass error looks like this
 var SassError = {
     message: 'invalid property name',
@@ -28,6 +28,10 @@ var matchCss = /\.css$/;
 var threadPoolSize = process.env.UV_THREADPOOL_SIZE || 4;
 var asyncSassJobQueue = async.queue(sass.render, threadPoolSize - 1);
 
+var globalsContent;
+var globalsHash;
+var isFirstFile = true;
+
 /**
  * The sass-loader makes node-sass available to webpack modules.
  *
@@ -40,7 +44,6 @@ module.exports = function (content) {
     var self = this;
     var resourcePath = this.resourcePath;
     var sassOptions = getLoaderConfig(this);
-    var result;
 
     /**
      * Enhances the sass error with additional information about what actually went wrong.
@@ -204,7 +207,63 @@ module.exports = function (content) {
         self.dependency(path.normalize(file));
     }
 
+    // Reads the globals from files specified in the globals option
+    function loadGlobals(globals) {
+        if (globals && !globalsContent) {
+            debugger;
+            globalsContent = '';
+            for(var i = 0; i < globals.length; i++) {
+                globalsContent += fs.readFileSync(globals[i], 'utf8');
+            }
+            globalsContent += os.EOL;
+            globalsHash = crypto.createHash('md5')
+                .update(globalsContent)
+                .digest('hex');
+        }
+    }
+
+    // For the first file, the globals are added without hashes since they will not be removed.
+    function addGlobalsWithoutHashes() {
+        debugger;
+        content = globalsContent + content;
+        console.log(globalsContent);
+        console.log('WITHOUT ' + content);
+    }
+
+    // Adds the globals with surrounding hashes to allow removal after passing it to libsass.
+    function addGlobalsWithHashes() {
+        debugger;
+        var delimiter = '/*' + globalsHash + '*/' + os.EOL;
+        content = delimiter + globalsContent +  delimiter + content;
+        console.log('WITH ' + content);
+    }
+
+    // Removes the globals from the outputted css
+    function stripGlobals(cssOutput) {
+        if (sassOptions.globals) {
+            if (isFirstFile) {
+                isFirstFile = false;
+                return cssOutput;
+            } else {
+                var textBetweenHashRegex = new RegExp('\\/\\*' + globalsHash + '\\*\\/' + '[\\S\\s]*' + '\\/\\*' + globalsHash + '\\*\\/');
+                return cssOutput.replace(textBetweenHashRegex, '');
+            }
+        } else {
+            return cssOutput;
+        }
+
+    }
+
     this.cacheable();
+
+    if (sassOptions.globals) {
+        loadGlobals(sassOptions.globals);
+        if (isFirstFile) {
+            addGlobalsWithoutHashes();
+        } else {
+            addGlobalsWithHashes();
+        }
+    }
 
     sassOptions.data = sassOptions.data ? (sassOptions.data + os.EOL + content) : content;
 
@@ -258,7 +317,7 @@ module.exports = function (content) {
         try {
             result = sass.renderSync(sassOptions);
             addIncludedFilesToWebpack(result.stats.includedFiles);
-            return result.css.toString();
+            return stripGlobals(result.css.toString());
         } catch (err) {
             formatSassError(err);
             err.file && this.dependency(err.file);
@@ -267,6 +326,8 @@ module.exports = function (content) {
     }
 
     asyncSassJobQueue.push(sassOptions, function onRender(err, result) {
+        var cssOutput;
+
         if (err) {
             formatSassError(err);
             err.file && self.dependency(err.file);
@@ -286,7 +347,9 @@ module.exports = function (content) {
         }
 
         addIncludedFilesToWebpack(result.stats.includedFiles);
-        callback(null, result.css.toString(), result.map);
+
+        cssOutput = stripGlobals(result.css.toString());
+        callback(null, cssOutput, result.map);
     });
 };
 
@@ -411,11 +474,11 @@ function proxyCustomImporters(importer, resourcePath) {
     return [].concat(importer).map(function (importer) {
         return function (url, prev, done) {
             var args = slice.call(arguments);
-            
+
             if (args[1] === 'stdin') {
                 args[1] = resourcePath;
             }
-            
+
             return importer.apply(this, args);
         };
     });
