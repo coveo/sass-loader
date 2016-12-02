@@ -8,6 +8,7 @@ var fs = require('fs');
 var async = require('async');
 var assign = require('object-assign');
 var crypto = require('crypto');
+
 // A typical sass error looks like this
 var SassError = {
     message: 'invalid property name',
@@ -210,32 +211,26 @@ module.exports = function (content) {
     // Reads the globals from files specified in the globals option
     function loadGlobals(globals) {
         if (globals && !globalsContent) {
-            debugger;
             globalsContent = '';
             for(var i = 0; i < globals.length; i++) {
                 globalsContent += fs.readFileSync(globals[i], 'utf8');
             }
             globalsContent += os.EOL;
             globalsHash = crypto.createHash('md5')
-                .update(globalsContent)
+                .update(globals.join(''))
                 .digest('hex');
         }
     }
 
     // For the first file, the globals are added without hashes since they will not be removed.
     function addGlobalsWithoutHashes() {
-        debugger;
         content = globalsContent + content;
-        console.log(globalsContent);
-        console.log('WITHOUT ' + content);
     }
 
     // Adds the globals with surrounding hashes to allow removal after passing it to libsass.
     function addGlobalsWithHashes() {
-        debugger;
         var delimiter = '/*' + globalsHash + '*/' + os.EOL;
         content = delimiter + globalsContent +  delimiter + content;
-        console.log('WITH ' + content);
     }
 
     // Removes the globals from the outputted css
@@ -245,13 +240,14 @@ module.exports = function (content) {
                 isFirstFile = false;
                 return cssOutput;
             } else {
-                var textBetweenHashRegex = new RegExp('\\/\\*' + globalsHash + '\\*\\/' + '[\\S\\s]*' + '\\/\\*' + globalsHash + '\\*\\/');
+                // Regex that matches the delimiters and the content between them.
+                var delimiter = '\\/\\*' + globalsHash + '\\*\\/';
+                var textBetweenHashRegex = new RegExp(delimiter + '[\\S\\s]*' + delimiter);
                 return cssOutput.replace(textBetweenHashRegex, '');
             }
         } else {
             return cssOutput;
         }
-
     }
 
     this.cacheable();
