@@ -250,8 +250,6 @@ module.exports = function (content) {
         }
     }
 
-    this.cacheable();
-
     if (sassOptions.globals) {
         loadGlobals(sassOptions.globals);
         if (isFirstFile) {
